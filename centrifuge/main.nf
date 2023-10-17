@@ -1,7 +1,7 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-// nextflow run main.nf --reads  --outdir 'results' --index 'index/p_compressed+h+v'
+// nextflow run main.nf --reads  --outdir 'results' --index index/p_compressed+h+v --db kraken_db
 
 
 outdir = file(params.outdir)
@@ -115,12 +115,64 @@ process CENTRIFUGE {
 }
 
 
+process KRAKEN2 {
+    publishDir "${outdir}/kraken2/${sampleId}", mode: 'copy', overwrite: 'false'
+    executor 'local'
+    cpus 6
+
+    input:
+        tuple val(sampleId), path(reads_ch)
+
+    output:
+        tuple val(sampleId), path("*.kraken2.k2report"), emit: kraken2_report
+
+    script:
+    """
+    mkdir -p ${outdir}/kraken2/${sampleId}
+
+    kraken2 \\
+    --db ${params.db} \\
+    --paired \\
+    --threads ${task.cpus} \\
+    --report ${sampleId}.kraken2.k2report \\
+    ${reads_ch[0]} ${reads_ch[1]}
+    """
+}
+
+
+process BRACKEN {
+    publishDir "${outdir}/bracken/${sampleId}", mode: 'copy', overwrite: 'false'
+    executor 'local'
+    cpus 6
+
+    input:
+        tuple val(sampleId), path(kraken2_report)
+
+    output:
+        tuple val(sampleId), path("*.bracken.report"), emit: bracken_report
+
+    script:
+    """
+    mkdir -p ${outdir}/kraken2/${sampleId}
+
+    bracken \\
+    -d ${params.db} \\
+    -i ${kraken2_report} \\
+    -o ${sampleId}.bracken.report \\
+    -r 100 \\
+    -l G \\
+    -t 10
+    """
+}
+
 
 workflow {
 
     Channel.fromFilePairs("${params.reads}/*_R{1,2}_*.fastq.gz", type:'file').set{reads_ch}
     TRIMMOMATIC(reads_ch)
     // FASTQC(trim_paired)
-    SPADES(TRIMMOMATIC.out.trim_paired, TRIMMOMATIC.out.trim_unpaired)
+    // SPADES(TRIMMOMATIC.out.trim_paired, TRIMMOMATIC.out.trim_unpaired)
     CENTRIFUGE(TRIMMOMATIC.out.trim_paired)
+    KRAKEN2(TRIMMOMATIC.out.trim_paired)
+    BRACKEN(KRAKEN2.out.kraken2_report)
 }
